@@ -1,8 +1,8 @@
-# AdvancedDomainAnalyzer - README
+# Explorador de Domínios
 
 ## Descrição
 
-**AdvancedDomainAnalyzer** é um poderoso script Python desenvolvido para realizar análises detalhadas de domínios e identificar potenciais vulnerabilidades de segurança. Ele combina múltiplas técnicas de reconhecimento para coletar informações sobre DNS, WHOIS, segurança de SSL, geolocalização de IPs, reputação de domínio e muito mais.
+**O explorador de domínios** é um script Python desenvolvido para realizar análises detalhadas de domínios e identificar potenciais vulnerabilidades de segurança. Ele combina múltiplas técnicas de reconhecimento para coletar informações sobre DNS, WHOIS, segurança de SSL, geolocalização de IPs, reputação de domínio e muito mais.
 
 Este projeto é ideal para profissionais de segurança da informação, pesquisadores e entusiastas interessados em realizar análises abrangentes de domínios, visando identificação de riscos e possíveis pontos de ataque.
 
@@ -19,8 +19,8 @@ Este projeto é ideal para profissionais de segurança da informação, pesquisa
 7. **Detecção de Tecnologias Web**: Identifica tecnologias como WordPress, Joomla, React, Angular e outras.
 8. **Segurança de E-mails**: Verifica registros MX, SPF e DMARC para segurança de e-mail.
 9. **Análise de Subdomain Takeover**: Detecta potenciais vulnerabilidades relacionadas à posse de subdomínios.
-10. **Varredura de Portas Comuns** *(Opcional)*: Escaneia portas como 80, 443, 22, 3306, entre outras.
-11. **Reputação do Domínio** *(Opcional)*: Consulta APIs como VirusTotal para verificar reputação.
+10. **Varredura de Portas Comuns**: Escaneia portas como 80, 443, 22, 3306, entre outras.
+11. **Reputação do Domínio**: Consulta APIs como VirusTotal para verificar reputação.
 
 ---
 
@@ -31,7 +31,7 @@ Este projeto é ideal para profissionais de segurança da informação, pesquisa
   ```bash
   pip install whois dnspython requests colorama geoip2 tldextract nmap python-nmap
   ```
-- Banco de dados GeoIP (opcional): `GeoLite2-Country.mmdb`
+- Banco de dados GeoIP: `GeoLite2-Country.mmdb`
 
 ---
 
@@ -40,7 +40,7 @@ Este projeto é ideal para profissionais de segurança da informação, pesquisa
 1. Clone o repositório ou salve o script em sua máquina.
 2. Execute o script:
    ```bash
-   python script_name.py
+   python explorador-dns.py
    ```
 3. Insira o domínio a ser analisado quando solicitado ou digite `sair` para encerrar.
 
