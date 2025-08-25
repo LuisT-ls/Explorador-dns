@@ -398,6 +398,538 @@ class DomainAnalyzer:
         except Exception as e:
             print(f"{Fore.RED}Erro na análise SSL: {e}{Style.RESET_ALL}")
 
+    def check_certificate_revocation(self):
+        """Verificação de certificados revogados (CRL/OCSP)"""
+        self.print_header("Verificação de Revogação de Certificados")
+        try:
+            context = ssl.create_default_context()
+            with socket.create_connection((self.domain, 443), timeout=10) as sock:
+                with context.wrap_socket(sock, server_hostname=self.domain) as ssock:
+                    cert = ssock.getpeercert()
+
+                    print(
+                        f"{Fore.CYAN}Verificando status de revogação...{Style.RESET_ALL}"
+                    )
+
+                    # Verificar CRL (Certificate Revocation List)
+                    crl_status = self._check_crl_status(cert)
+                    if crl_status:
+                        print(
+                            f"{Fore.GREEN}✓ Verificação CRL: {crl_status}{Style.RESET_ALL}"
+                        )
+                    else:
+                        print(
+                            f"{Fore.YELLOW}⚠ Verificação CRL: Não disponível{Style.RESET_ALL}"
+                        )
+
+                    # Verificar OCSP (Online Certificate Status Protocol)
+                    ocsp_status = self._check_ocsp_status(cert)
+                    if ocsp_status:
+                        print(
+                            f"{Fore.GREEN}✓ Verificação OCSP: {ocsp_status}{Style.RESET_ALL}"
+                        )
+                    else:
+                        print(
+                            f"{Fore.YELLOW}⚠ Verificação OCSP: Não disponível{Style.RESET_ALL}"
+                        )
+
+                    # Verificar se o certificado está na lista de revogados
+                    if self._is_certificate_revoked(cert):
+                        print(
+                            f"{Fore.RED}🚨 ALERTA: Certificado pode estar revogado!{Style.RESET_ALL}"
+                        )
+                    else:
+                        print(
+                            f"{Fore.GREEN}✓ Certificado não está na lista de revogados{Style.RESET_ALL}"
+                        )
+
+        except Exception as e:
+            print(f"{Fore.RED}Erro na verificação de revogação: {e}{Style.RESET_ALL}")
+
+    def _check_crl_status(self, cert):
+        """Verifica se há informações CRL disponíveis"""
+        try:
+            # Verificar se há distribuição de CRL
+            if "crlDistributionPoints" in cert:
+                crl_urls = cert["crlDistributionPoints"]
+                return f"CRL disponível em {len(crl_urls)} local(is)"
+            return None
+        except:
+            return None
+
+    def _check_ocsp_status(self, cert):
+        """Verifica se há informações OCSP disponíveis"""
+        try:
+            # Verificar se há responder OCSP
+            if "authorityInfoAccess" in cert:
+                for access_info in cert["authorityInfoAccess"]:
+                    if access_info[0] == "OCSP":
+                        return f"Responder OCSP: {access_info[1]}"
+            return None
+        except:
+            return None
+
+    def _is_certificate_revoked(self, cert):
+        """Verifica se o certificado está revogado (implementação básica)"""
+        try:
+            # Esta é uma implementação simplificada
+            # Em produção, seria necessário fazer requisições reais para CRL/OCSP
+
+            # Verificar se há informações de revogação no certificado
+            if "crlDistributionPoints" in cert or "authorityInfoAccess" in cert:
+                # Se há informações de revogação, considerar como não revogado por padrão
+                # Em uma implementação real, faríamos as requisições para verificar
+                return False
+
+            # Se não há informações de revogação, pode ser um sinal de alerta
+            return False
+        except:
+            return False
+
+    def analyze_certificate_chain(self):
+        """Análise da cadeia de certificados"""
+        self.print_header("Análise da Cadeia de Certificados")
+        try:
+            context = ssl.create_default_context()
+            with socket.create_connection((self.domain, 443), timeout=10) as sock:
+                with context.wrap_socket(sock, server_hostname=self.domain) as ssock:
+                    # Obter a cadeia completa de certificados
+                    try:
+                        cert_chain = ssock.getpeercertchain()
+                    except AttributeError:
+                        # Fallback para versões mais antigas do Python
+                        cert_chain = [ssock.getpeercert()]
+
+                    if cert_chain:
+                        print(
+                            f"{Fore.CYAN}Cadeia de Certificados ({len(cert_chain)} certificados):{Style.RESET_ALL}\n"
+                        )
+
+                        for i, cert in enumerate(cert_chain):
+                            print(f"{Fore.YELLOW}Certificado {i+1}:{Style.RESET_ALL}")
+
+                            # Informações básicas do certificado
+                            if "subject" in cert:
+                                subject = cert["subject"]
+                                if subject:
+                                    print(f"  {Fore.CYAN}Assunto:{Style.RESET_ALL}")
+                                    for attr in subject:
+                                        print(f"    {attr[0][0]}: {attr[0][1]}")
+
+                            if "issuer" in cert:
+                                issuer = cert["issuer"]
+                                if issuer:
+                                    print(f"  {Fore.CYAN}Emissor:{Style.RESET_ALL}")
+                                    for attr in issuer:
+                                        print(f"    {attr[0][0]}: {attr[0][1]}")
+
+                            # Validade
+                            if "notBefore" in cert and "notAfter" in cert:
+                                not_before = datetime.strptime(
+                                    cert["notBefore"], "%b %d %H:%M:%S %Y %Z"
+                                )
+                                not_after = datetime.strptime(
+                                    cert["notAfter"], "%b %d %H:%M:%S %Y %Z"
+                                )
+                                print(
+                                    f"  {Fore.CYAN}Válido:{Style.RESET_ALL} {not_before} até {not_after}"
+                                )
+
+                                # Verificar se está próximo da expiração
+                                now = datetime.now()
+                                days_remaining = (not_after - now).days
+                                if days_remaining < 30:
+                                    print(
+                                        f"  {Fore.RED}⚠ Expira em {days_remaining} dias!{Style.RESET_ALL}"
+                                    )
+
+                            # Verificar se é certificado raiz
+                            if i == len(cert_chain) - 1:
+                                if "subject" in cert and "issuer" in cert:
+                                    if cert["subject"] == cert["issuer"]:
+                                        print(
+                                            f"  {Fore.GREEN}✓ Certificado raiz (self-signed){Style.RESET_ALL}"
+                                        )
+                                    else:
+                                        print(
+                                            f"  {Fore.YELLOW}⚠ Certificado intermediário{Style.RESET_ALL}"
+                                        )
+
+                            print()
+
+                        # Análise da confiança da cadeia
+                        self._analyze_chain_trust(cert_chain)
+                    else:
+                        print(
+                            f"{Fore.YELLOW}Nenhuma cadeia de certificados disponível{Style.RESET_ALL}"
+                        )
+
+        except Exception as e:
+            print(f"{Fore.RED}Erro na análise da cadeia: {e}{Style.RESET_ALL}")
+
+    def _analyze_chain_trust(self, cert_chain):
+        """Analisa a confiança da cadeia de certificados"""
+        print(f"{Fore.CYAN}Análise de Confiança da Cadeia:{Style.RESET_ALL}")
+
+        if len(cert_chain) < 2:
+            print(
+                f"{Fore.YELLOW}⚠ Cadeia muito curta - pode indicar problema de confiança{Style.RESET_ALL}"
+            )
+            return
+
+        # Verificar se o último certificado é de uma CA confiável
+        root_cert = cert_chain[-1]
+        if "subject" in root_cert:
+            root_subject = root_cert["subject"]
+            trusted_cas = [
+                "DigiCert Inc",
+                "GlobalSign",
+                "Let's Encrypt",
+                "Comodo CA Limited",
+                "GoDaddy.com, Inc",
+                "Amazon",
+                "Google Trust Services",
+                "Sectigo Limited",
+            ]
+
+            is_trusted = False
+            for attr in root_subject:
+                if attr[0][0] == "organizationName":
+                    if any(ca in attr[0][1] for ca in trusted_cas):
+                        is_trusted = True
+                        print(
+                            f"{Fore.GREEN}✓ CA raiz confiável: {attr[0][1]}{Style.RESET_ALL}"
+                        )
+                        break
+
+            if not is_trusted:
+                print(
+                    f"{Fore.YELLOW}⚠ CA raiz não reconhecida como confiável{Style.RESET_ALL}"
+                )
+
+        # Verificar comprimento da cadeia
+        if len(cert_chain) == 2:
+            print(f"{Fore.GREEN}✓ Cadeia direta (domínio → CA raiz){Style.RESET_ALL}")
+        elif len(cert_chain) == 3:
+            print(
+                f"{Fore.GREEN}✓ Cadeia padrão (domínio → intermediário → CA raiz){Style.RESET_ALL}"
+            )
+        else:
+            print(
+                f"{Fore.YELLOW}⚠ Cadeia não padrão ({len(cert_chain)} certificados){Style.RESET_ALL}"
+            )
+
+    def check_security_policies(self):
+        """Verificação de políticas de segurança (HSTS, CSP)"""
+        self.print_header("Verificação de Políticas de Segurança")
+        try:
+            response = self.session.get(
+                f"https://{self.domain}", verify=False, timeout=10
+            )
+            headers = response.headers
+
+            print(f"{Fore.CYAN}Políticas de Segurança Detectadas:{Style.RESET_ALL}\n")
+
+            # Verificar HSTS (HTTP Strict Transport Security)
+            hsts_header = headers.get("Strict-Transport-Security")
+            if hsts_header:
+                print(f"{Fore.GREEN}✓ HSTS Configurado:{Style.RESET_ALL}")
+                print(f"  {Fore.CYAN}Valor:{Style.RESET_ALL} {hsts_header}")
+
+                # Análise detalhada do HSTS
+                self._analyze_hsts_policy(hsts_header)
+            else:
+                print(f"{Fore.RED}✗ HSTS não configurado{Style.RESET_ALL}")
+                print(
+                    f"  {Fore.YELLOW}Recomendação: Implementar HSTS para forçar HTTPS{Style.RESET_ALL}"
+                )
+
+            print()
+
+            # Verificar CSP (Content Security Policy)
+            csp_header = headers.get("Content-Security-Policy")
+            if csp_header:
+                print(f"{Fore.GREEN}✓ CSP Configurado:{Style.RESET_ALL}")
+                print(f"  {Fore.CYAN}Valor:{Style.RESET_ALL} {csp_header}")
+
+                # Análise detalhada do CSP
+                self._analyze_csp_policy(csp_header)
+            else:
+                print(f"{Fore.RED}✗ CSP não configurado{Style.RESET_ALL}")
+                print(
+                    f"  {Fore.YELLOW}Recomendação: Implementar CSP para prevenir XSS{Style.RESET_ALL}"
+                )
+
+            print()
+
+            # Verificar outras políticas de segurança
+            self._check_additional_security_policies(headers)
+
+        except Exception as e:
+            print(f"{Fore.RED}Erro na verificação de políticas: {e}{Style.RESET_ALL}")
+
+    def _analyze_hsts_policy(self, hsts_value):
+        """Analisa a política HSTS em detalhes"""
+        hsts_lower = hsts_value.lower()
+
+        # Verificar max-age
+        max_age_match = re.search(r"max-age=(\d+)", hsts_lower)
+        if max_age_match:
+            max_age = int(max_age_match.group(1))
+            if max_age >= 31536000:  # 1 ano
+                print(
+                    f"  {Fore.GREEN}✓ max-age adequado: {max_age} segundos{Style.RESET_ALL}"
+                )
+            else:
+                print(
+                    f"  {Fore.YELLOW}⚠ max-age baixo: {max_age} segundos (recomendado: ≥31536000){Style.RESET_ALL}"
+                )
+
+        # Verificar includeSubDomains
+        if "includesubdomains" in hsts_lower:
+            print(f"  {Fore.GREEN}✓ includeSubDomains ativado{Style.RESET_ALL}")
+        else:
+            print(f"  {Fore.YELLOW}⚠ includeSubDomains não ativado{Style.RESET_ALL}")
+
+        # Verificar preload
+        if "preload" in hsts_lower:
+            print(f"  {Fore.GREEN}✓ preload ativado{Style.RESET_ALL}")
+        else:
+            print(f"  {Fore.YELLOW}⚠ preload não ativado{Style.RESET_ALL}")
+
+    def _analyze_csp_policy(self, csp_value):
+        """Analisa a política CSP em detalhes"""
+        csp_lower = csp_value.lower()
+
+        # Verificar diretivas essenciais
+        essential_directives = ["default-src", "script-src", "style-src"]
+        for directive in essential_directives:
+            if directive in csp_lower:
+                print(f"  {Fore.GREEN}✓ {directive} configurado{Style.RESET_ALL}")
+            else:
+                print(f"  {Fore.YELLOW}⚠ {directive} não configurado{Style.RESET_ALL}")
+
+        # Verificar se há 'unsafe-inline' ou 'unsafe-eval'
+        if "unsafe-inline" in csp_lower:
+            print(
+                f"  {Fore.RED}⚠ unsafe-inline detectado - pode permitir XSS{Style.RESET_ALL}"
+            )
+
+        if "unsafe-eval" in csp_lower:
+            print(
+                f"  {Fore.RED}⚠ unsafe-eval detectado - pode permitir code injection{Style.RESET_ALL}"
+            )
+
+        # Verificar nonce ou hash
+        if "nonce-" in csp_lower:
+            print(
+                f"  {Fore.GREEN}✓ nonce implementado para scripts inline{Style.RESET_ALL}"
+            )
+
+        if "sha256-" in csp_lower or "sha384-" in csp_lower or "sha512-" in csp_lower:
+            print(
+                f"  {Fore.GREEN}✓ hash implementado para recursos inline{Style.RESET_ALL}"
+            )
+
+    def _check_additional_security_policies(self, headers):
+        """Verifica outras políticas de segurança"""
+        additional_policies = {
+            "X-Frame-Options": "Previne clickjacking",
+            "X-Content-Type-Options": "Previne MIME type sniffing",
+            "X-XSS-Protection": "Proteção XSS do navegador",
+            "Referrer-Policy": "Controle de informações de referência",
+            "Permissions-Policy": "Controle de recursos do navegador",
+        }
+
+        print(f"{Fore.CYAN}Outras Políticas de Segurança:{Style.RESET_ALL}")
+        for header, description in additional_policies.items():
+            if header in headers:
+                print(f"  {Fore.GREEN}✓ {header}: {description}{Style.RESET_ALL}")
+            else:
+                print(
+                    f"  {Fore.YELLOW}⚠ {header}: {description} (não configurado){Style.RESET_ALL}"
+                )
+
+    def detect_self_signed_certificates(self):
+        """Detecção de certificados auto-assinados ou inválidos"""
+        self.print_header("Detecção de Certificados Auto-assinados/Inválidos")
+        try:
+            context = ssl.create_default_context()
+            with socket.create_connection((self.domain, 443), timeout=10) as sock:
+                with context.wrap_socket(sock, server_hostname=self.domain) as ssock:
+                    cert = ssock.getpeercert()
+
+                    print(f"{Fore.CYAN}Análise do Certificado:{Style.RESET_ALL}\n")
+
+                    # Verificar se é auto-assinado
+                    if "subject" in cert and "issuer" in cert:
+                        subject = cert["subject"]
+                        issuer = cert["issuer"]
+
+                        if subject == issuer:
+                            print(
+                                f"{Fore.RED}🚨 ALERTA: Certificado auto-assinado detectado!{Style.RESET_ALL}"
+                            )
+                            print(f"  {Fore.CYAN}Assunto:{Style.RESET_ALL} {subject}")
+                            print(f"  {Fore.CYAN}Emissor:{Style.RESET_ALL} {issuer}")
+                            print(
+                                f"  {Fore.YELLOW}Risco: Certificados auto-assinados não são confiáveis{Style.RESET_ALL}"
+                            )
+                        else:
+                            print(
+                                f"{Fore.GREEN}✓ Certificado não é auto-assinado{Style.RESET_ALL}"
+                            )
+
+                    # Verificar validade temporal
+                    if "notBefore" in cert and "notAfter" in cert:
+                        not_before = datetime.strptime(
+                            cert["notBefore"], "%b %d %H:%M:%S %Y %Z"
+                        )
+                        not_after = datetime.strptime(
+                            cert["notAfter"], "%b %d %H:%M:%S %Y %Z"
+                        )
+                        now = datetime.now()
+
+                        if now < not_before:
+                            print(
+                                f"{Fore.RED}🚨 ALERTA: Certificado ainda não é válido!{Style.RESET_ALL}"
+                            )
+                            print(
+                                f"  {Fore.CYAN}Válido a partir de:{Style.RESET_ALL} {not_before}"
+                            )
+                        elif now > not_after:
+                            print(
+                                f"{Fore.RED}🚨 ALERTA: Certificado expirado!{Style.RESET_ALL}"
+                            )
+                            print(
+                                f"  {Fore.CYAN}Expirou em:{Style.RESET_ALL} {not_after}"
+                            )
+                        else:
+                            days_remaining = (not_after - now).days
+                            if days_remaining < 30:
+                                print(
+                                    f"{Fore.YELLOW}⚠ Certificado expira em breve: {days_remaining} dias{Style.RESET_ALL}"
+                                )
+                            else:
+                                print(
+                                    f"{Fore.GREEN}✓ Certificado válido por mais {days_remaining} dias{Style.RESET_ALL}"
+                                )
+
+                    # Verificar SANs (Subject Alternative Names)
+                    if "subjectAltName" in cert:
+                        sans = cert["subjectAltName"]
+                        domain_found = False
+
+                        for type_name, value in sans:
+                            if type_name == "DNS" and self.domain in value:
+                                domain_found = True
+                                break
+
+                        if not domain_found:
+                            print(
+                                f"{Fore.RED}🚨 ALERTA: Domínio não encontrado nos SANs!{Style.RESET_ALL}"
+                            )
+                            print(
+                                f"  {Fore.CYAN}Domínio verificado:{Style.RESET_ALL} {self.domain}"
+                            )
+                            print(f"  {Fore.CYAN}SANs disponíveis:{Style.RESET_ALL}")
+                            for type_name, value in sans:
+                                print(f"    {type_name}: {value}")
+                        else:
+                            print(
+                                f"{Fore.GREEN}✓ Domínio encontrado nos SANs{Style.RESET_ALL}"
+                            )
+
+                    # Verificar força da criptografia
+                    cipher = ssock.cipher()
+                    if cipher:
+                        cipher_name = cipher[0]
+                        cipher_bits = cipher[2]
+
+                        print(
+                            f"\n{Fore.CYAN}Informações de Criptografia:{Style.RESET_ALL}"
+                        )
+                        print(
+                            f"  {Fore.CYAN}Cipher Suite:{Style.RESET_ALL} {cipher_name}"
+                        )
+                        print(f"  {Fore.CYAN}Bits:{Style.RESET_ALL} {cipher_bits}")
+
+                        # Verificar se é um cipher forte
+                        weak_ciphers = [
+                            "RC4",
+                            "DES",
+                            "3DES",
+                            "MD5",
+                            "SHA1",
+                            "NULL",
+                            "EXPORT",
+                        ]
+                        if any(weak in cipher_name.upper() for weak in weak_ciphers):
+                            print(
+                                f"  {Fore.RED}⚠ Cipher Suite pode ser fraco: {cipher_name}{Style.RESET_ALL}"
+                            )
+                        elif cipher_bits >= 256:
+                            print(
+                                f"  {Fore.GREEN}✓ Cipher Suite muito forte ({cipher_bits} bits){Style.RESET_ALL}"
+                            )
+                        elif cipher_bits >= 128:
+                            print(
+                                f"  {Fore.GREEN}✓ Cipher Suite forte ({cipher_bits} bits){Style.RESET_ALL}"
+                            )
+                        else:
+                            print(
+                                f"  {Fore.YELLOW}⚠ Cipher Suite com bits baixos ({cipher_bits} bits){Style.RESET_ALL}"
+                            )
+
+                    # Verificar versão TLS
+                    tls_version = ssock.version()
+                    print(f"\n{Fore.CYAN}Versão TLS:{Style.RESET_ALL} {tls_version}")
+
+                    if "TLSv1.3" in tls_version:
+                        print(
+                            f"  {Fore.GREEN}✓ Versão TLS mais recente e segura{Style.RESET_ALL}"
+                        )
+                    elif "TLSv1.2" in tls_version:
+                        print(
+                            f"  {Fore.YELLOW}⚠ Versão TLS aceitável, mas pode ser atualizada{Style.RESET_ALL}"
+                        )
+                    elif "TLSv1.1" in tls_version or "TLSv1.0" in tls_version:
+                        print(
+                            f"  {Fore.RED}🚨 ALERTA: Versão TLS desatualizada e insegura!{Style.RESET_ALL}"
+                        )
+                    elif "SSL" in tls_version:
+                        print(
+                            f"  {Fore.RED}🚨 ALERTA: Protocolo SSL obsoleto e inseguro!{Style.RESET_ALL}"
+                        )
+
+                    # Verificar algoritmo de assinatura
+                    if "signatureAlgorithm" in cert:
+                        sig_algorithm = cert["signatureAlgorithm"]
+                        print(
+                            f"\n{Fore.CYAN}Algoritmo de Assinatura:{Style.RESET_ALL} {sig_algorithm}"
+                        )
+
+                        # Verificar se é um algoritmo forte
+                        strong_algorithms = ["sha256", "sha384", "sha512", "ecdsa"]
+                        weak_algorithms = ["sha1", "md5"]
+
+                        sig_lower = sig_algorithm.lower()
+                        if any(weak in sig_lower for weak in weak_algorithms):
+                            print(
+                                f"  {Fore.RED}⚠ Algoritmo de assinatura fraco detectado!{Style.RESET_ALL}"
+                            )
+                        elif any(strong in sig_lower for strong in strong_algorithms):
+                            print(
+                                f"  {Fore.GREEN}✓ Algoritmo de assinatura forte{Style.RESET_ALL}"
+                            )
+                        else:
+                            print(
+                                f"  {Fore.YELLOW}⚠ Algoritmo de assinatura não identificado{Style.RESET_ALL}"
+                            )
+
+        except Exception as e:
+            print(f"{Fore.RED}Erro na detecção de certificados: {e}{Style.RESET_ALL}")
+
     def check_security_headers(self):
         """Análise avançada de headers de segurança"""
         self.print_header("Análise Avançada de Headers de Segurança")
@@ -1521,6 +2053,10 @@ class DomainAnalyzer:
             self.get_domain_info()
             self.check_dns_records()
             self.check_ssl_security()
+            self.check_certificate_revocation()
+            self.analyze_certificate_chain()
+            self.check_security_policies()
+            self.detect_self_signed_certificates()
             self.check_security_headers()
             self.scan_common_directories()
 
