@@ -37,6 +37,13 @@ Este projeto é ideal para profissionais de segurança da informação, pesquisa
 14. **Varredura de Portas Comuns**: Escaneia portas como 80, 443, 22, 3306, entre outras.
 15. **Reputação do Domínio**: Consulta APIs como VirusTotal para verificar reputação.
 
+### 🚀 Novas Funcionalidades de Segurança Avançada
+
+16. **🔍 Verificação em Múltiplas Blacklists**: Verifica se o domínio está listado em blacklists como Spamhaus, SURBL, URIBL, DNSBL Sorbs, Barracuda e SpamCop.
+17. **🦠 Análise de Histórico de Malware**: Detecta indicadores de atividade maliciosa, URLs suspeitas, padrões de malware e similaridade com domínios maliciosos conhecidos.
+18. **🎣 Verificação de Phishing e Fraudes**: Identifica tentativas de phishing, spoofing, typosquatting e padrões de fraude financeira.
+19. **📊 Score de Reputação Inteligente**: Calcula um score de 0-100 baseado em múltiplas fontes, incluindo blacklists, análise de malware, phishing e APIs externas de reputação.
+
 ---
 
 ## Requisitos
@@ -44,9 +51,15 @@ Este projeto é ideal para profissionais de segurança da informação, pesquisa
 - **Python 3.6+**
 - Bibliotecas Python necessárias (instale com `pip`):
   ```bash
-  pip install whois dnspython requests colorama geoip2 tldextract nmap python-nmap
+  pip install -r requirements.txt
   ```
 - Banco de dados GeoIP: `GeoLite2-Country.mmdb`
+
+### Novas Dependências para Funcionalidades de Segurança
+
+- **lxml**: Parser XML/HTML para análise de conteúdo
+- **html5lib**: Parser HTML5 robusto
+- **Todas as dependências anteriores**: Mantidas para compatibilidade
 
 ---
 

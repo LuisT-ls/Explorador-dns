@@ -13,10 +13,7 @@ import threading
 from colorama import init, Fore, Style
 import sys
 import time
-import socket
 import nmap
-import requests
-import json
 from urllib.parse import urlparse
 from datetime import datetime, timedelta
 import logging
@@ -29,6 +26,12 @@ import base64
 import geoip2.database
 import tldextract
 
+# Novas bibliotecas para as funcionalidades de segurança
+import ipaddress
+import socket
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 # Inicializa colorama para formatação colorida
 init()
 
@@ -36,12 +39,77 @@ init()
 init(autoreset=True)
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s: %(message)s",
+    format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[
         logging.FileHandler("domain_analysis.log", mode="a"),
         logging.StreamHandler(sys.stdout),
     ],
 )
+
+# Configurações para as novas funcionalidades de segurança
+BLACKLIST_SERVICES = {
+    "spamhaus": {
+        "zen.spamhaus.org": "127.0.0.2-127.0.0.255",
+        "sbl.spamhaus.org": "127.0.0.2-127.0.0.255",
+        "xbl.spamhaus.org": "127.0.0.2-127.0.0.255",
+        "pbl.spamhaus.org": "127.0.0.2-127.0.0.255",
+    },
+    "surbl": "multi.surbl.org",
+    "uribl": "black.uribl.com",
+    "dnsbl": "dnsbl.sorbs.net",
+    "barracuda": "b.barracudacentral.org",
+    "sorbs": "dnsbl.sorbs.net",
+    "spamcop": "bl.spamcop.net",
+}
+
+REPUTATION_APIS = {
+    "virustotal": {
+        "url": "https://www.virustotal.com/vtapi/v2/url/report",
+        "api_key_required": True,
+        "rate_limit": 4,  # requests per minute
+    },
+    "urlhaus": {
+        "url": "https://urlhaus-api.abuse.ch/v1/host/",
+        "api_key_required": False,
+        "rate_limit": 10,
+    },
+    "phishtank": {
+        "url": "https://checkurl.phishtank.com/checkurl/",
+        "api_key_required": False,
+        "rate_limit": 15,
+    },
+    "google_safebrowsing": {
+        "url": "https://safebrowsing.googleapis.com/v4/threatMatches:find",
+        "api_key_required": True,
+        "rate_limit": 10,
+    },
+    "ibm_xforce": {
+        "url": "https://api.xforce.ibmcloud.com/url/",
+        "api_key_required": True,
+        "rate_limit": 5,
+    },
+}
+
+MALWARE_INDICATORS = {
+    "file_types": [".exe", ".bat", ".cmd", ".scr", ".pif", ".com", ".vbs", ".js"],
+    "suspicious_patterns": [
+        r"download.*\.exe",
+        r"update.*\.exe",
+        r"security.*\.exe",
+        r"scan.*\.exe",
+        r"clean.*\.exe",
+        r"\.zip.*password",
+        r"urgent.*action",
+        r"account.*suspended",
+        r"verify.*identity",
+        r"bank.*security",
+    ],
+    "malicious_domains": [
+        "malware.example.com",
+        "phishing.example.com",
+        "scam.example.com",
+    ],
+}
 
 # Payloads para testes de segurança
 SECURITY_PAYLOADS = {
@@ -269,6 +337,13 @@ class DomainAnalyzer:
                 f"{Fore.YELLOW}Aviso: Banco de dados GeoLite2 não encontrado. Geolocalização desativada.{Style.RESET_ALL}"
             )
             self.geoip_reader = None
+
+        # Configurações para as novas funcionalidades
+        self.blacklist_results = {}
+        self.malware_analysis = {}
+        self.phishing_indicators = {}
+        self.reputation_score = 0
+        self.reputation_details = {}
 
     @staticmethod
     def clean_domain(domain):
@@ -2070,6 +2145,23 @@ class DomainAnalyzer:
             self.check_email_security()
             self.analyze_subdomain_takeover()
 
+            # NOVAS FUNCIONALIDADES IMPLEMENTADAS
+            print(
+                f"\n{Fore.CYAN}🚀 Executando Novas Funcionalidades de Segurança{Style.RESET_ALL}"
+            )
+
+            # 1. Verificação em múltiplas blacklists
+            self.check_multiple_blacklists()
+
+            # 2. Análise de histórico de malware
+            self.analyze_malware_history()
+
+            # 3. Verificação de phishing e fraudes
+            self.check_phishing_fraud()
+
+            # 4. Score de reputação baseado em múltiplas fontes
+            self.calculate_reputation_score()
+
             # Métodos que requerem cautela ou configurações específicas
             # Descomentar com cuidado e após configurações
             # self.check_open_ports()
@@ -2083,6 +2175,958 @@ class DomainAnalyzer:
             print(f"\n{Fore.YELLOW}Análise interrompida pelo usuário{Style.RESET_ALL}")
         except Exception as e:
             print(f"{Fore.RED}Erro durante a análise: {e}{Style.RESET_ALL}")
+
+    def check_multiple_blacklists(self):
+        """Verificação em múltiplas blacklists (Spamhaus, SURBL, etc.)"""
+        self.print_header("🔍 Verificação em Múltiplas Blacklists")
+
+        try:
+            # Obter IP do domínio
+            ip_address = socket.gethostbyname(self.domain)
+            print(f"{Fore.CYAN}IP do domínio:{Style.RESET_ALL} {ip_address}")
+
+            # Verificar Spamhaus (múltiplas listas)
+            print(f"\n{Fore.YELLOW}Verificando Spamhaus...{Style.RESET_ALL}")
+            spamhaus_results = self._check_spamhaus_lists(ip_address)
+
+            # Verificar outras blacklists
+            print(f"\n{Fore.YELLOW}Verificando outras blacklists...{Style.RESET_ALL}")
+            other_blacklists = self._check_other_blacklists(ip_address)
+
+            # Consolidar resultados
+            self.blacklist_results = {
+                "spamhaus": spamhaus_results,
+                "other_blacklists": other_blacklists,
+                "total_blacklists": len(spamhaus_results) + len(other_blacklists),
+                "blacklisted_count": sum(
+                    1 for result in spamhaus_results.values() if result["listed"]
+                )
+                + sum(1 for result in other_blacklists.values() if result["listed"]),
+            }
+
+            # Exibir resumo
+            self._display_blacklist_summary()
+
+        except Exception as e:
+            print(f"{Fore.RED}Erro na verificação de blacklists: {e}{Style.RESET_ALL}")
+            self.logger.error(f"Erro na verificação de blacklists: {e}")
+
+    def _check_spamhaus_lists(self, ip_address):
+        """Verificar todas as listas do Spamhaus"""
+        results = {}
+
+        for list_name, range_info in BLACKLIST_SERVICES["spamhaus"].items():
+            try:
+                # Converter IP para formato reverso
+                reversed_ip = ".".join(reversed(ip_address.split(".")))
+                query_domain = f"{reversed_ip}.{list_name}"
+
+                # Verificar se está na blacklist
+                try:
+                    dns.resolver.resolve(query_domain, "A")
+                    results[list_name] = {
+                        "listed": True,
+                        "status": "BLOCKED",
+                        "description": "IP encontrado na blacklist Spamhaus",
+                    }
+                    print(f"  {Fore.RED}❌ {list_name}: BLOQUEADO{Style.RESET_ALL}")
+                except dns.resolver.NXDOMAIN:
+                    results[list_name] = {
+                        "listed": False,
+                        "status": "CLEAN",
+                        "description": "IP não encontrado na blacklist",
+                    }
+                    print(f"  {Fore.GREEN}✅ {list_name}: LIMPO{Style.RESET_ALL}")
+
+            except Exception as e:
+                results[list_name] = {
+                    "listed": False,
+                    "status": "ERROR",
+                    "description": f"Erro na verificação: {e}",
+                }
+                print(f"  {Fore.YELLOW}⚠️ {list_name}: ERRO{Style.RESET_ALL}")
+
+        return results
+
+    def _check_other_blacklists(self, ip_address):
+        """Verificar outras blacklists populares"""
+        results = {}
+
+        for service_name, dns_server in BLACKLIST_SERVICES.items():
+            if service_name == "spamhaus":
+                continue
+
+            try:
+                reversed_ip = ".".join(reversed(ip_address.split(".")))
+                query_domain = f"{reversed_ip}.{dns_server}"
+
+                try:
+                    dns.resolver.resolve(query_domain, "A")
+                    results[service_name] = {
+                        "listed": True,
+                        "status": "BLOCKED",
+                        "description": f"IP encontrado na blacklist {service_name.upper()}",
+                    }
+                    print(f"  {Fore.RED}❌ {service_name}: BLOQUEADO{Style.RESET_ALL}")
+                except dns.resolver.NXDOMAIN:
+                    results[service_name] = {
+                        "listed": False,
+                        "status": "CLEAN",
+                        "description": f"IP não encontrado na blacklist {service_name.upper()}",
+                    }
+                    print(f"  {Fore.GREEN}✅ {service_name}: LIMPO{Style.RESET_ALL}")
+
+            except Exception as e:
+                results[service_name] = {
+                    "listed": False,
+                    "status": "ERROR",
+                    "description": f"Erro na verificação: {e}",
+                }
+                print(f"  {Fore.YELLOW}⚠️ {service_name}: ERRO{Style.RESET_ALL}")
+
+        return results
+
+    def _display_blacklist_summary(self):
+        """Exibir resumo dos resultados das blacklists"""
+        total_blacklists = self.blacklist_results["total_blacklists"]
+        blacklisted_count = self.blacklist_results["blacklisted_count"]
+
+        print(f"\n{Fore.CYAN}📊 Resumo das Blacklists:{Style.RESET_ALL}")
+        print(f"Total de blacklists verificadas: {total_blacklists}")
+        print(f"Blacklists que bloquearam: {blacklisted_count}")
+
+        if blacklisted_count == 0:
+            print(
+                f"{Fore.GREEN}✅ Domínio não está em nenhuma blacklist conhecida{Style.RESET_ALL}"
+            )
+        elif blacklisted_count <= 2:
+            print(
+                f"{Fore.YELLOW}⚠️ Domínio está em {blacklisted_count} blacklist(s) - atenção necessária{Style.RESET_ALL}"
+            )
+        else:
+            print(
+                f"{Fore.RED}🚨 Domínio está em {blacklisted_count} blacklist(s) - alto risco{Style.RESET_ALL}"
+            )
+
+    def analyze_malware_history(self):
+        """Análise de histórico de malware"""
+        self.print_header("🦠 Análise de Histórico de Malware")
+
+        try:
+            # Verificar URLs suspeitas
+            self._check_suspicious_urls()
+
+            # Verificar padrões de malware
+            self._check_malware_patterns()
+
+            # Verificar domínios maliciosos conhecidos
+            self._check_known_malicious_domains()
+
+            # Verificar histórico de arquivos suspeitos
+            self._check_malware_file_history()
+
+            # Exibir resumo da análise
+            self._display_malware_summary()
+
+        except Exception as e:
+            print(f"{Fore.RED}Erro na análise de malware: {e}{Style.RESET_ALL}")
+            self.logger.error(f"Erro na análise de malware: {e}")
+
+    def _check_suspicious_urls(self):
+        """Verificar URLs suspeitas no domínio"""
+        print(f"{Fore.YELLOW}Verificando URLs suspeitas...{Style.RESET_ALL}")
+
+        suspicious_urls = []
+        test_paths = [
+            "/download",
+            "/update",
+            "/security",
+            "/scan",
+            "/clean",
+            "/install",
+            "/setup",
+            "/patch",
+            "/fix",
+            "/repair",
+        ]
+
+        for path in test_paths:
+            try:
+                url = f"https://{self.domain}{path}"
+                response = self.session.head(url, timeout=5, allow_redirects=True)
+
+                if response.status_code == 200:
+                    # Verificar se contém arquivos executáveis
+                    if any(
+                        ext in response.url.lower()
+                        for ext in MALWARE_INDICATORS["file_types"]
+                    ):
+                        suspicious_urls.append(
+                            {
+                                "url": response.url,
+                                "type": "executable_file",
+                                "risk": "high",
+                            }
+                        )
+                        print(
+                            f"  {Fore.RED}🚨 URL suspeita encontrada: {response.url}{Style.RESET_ALL}"
+                        )
+
+            except Exception:
+                continue
+
+        self.malware_analysis["suspicious_urls"] = suspicious_urls
+
+    def _check_malware_patterns(self):
+        """Verificar padrões suspeitos de malware"""
+        print(f"{Fore.YELLOW}Verificando padrões suspeitos...{Style.RESET_ALL}")
+
+        try:
+            # Verificar página inicial
+            response = self.session.get(f"https://{self.domain}", timeout=10)
+            content = response.text.lower()
+
+            suspicious_patterns = []
+            for pattern in MALWARE_INDICATORS["suspicious_patterns"]:
+                if re.search(pattern, content):
+                    suspicious_patterns.append(
+                        {"pattern": pattern, "found_in": "homepage", "risk": "medium"}
+                    )
+                    print(
+                        f"  {Fore.YELLOW}⚠️ Padrão suspeito encontrado: {pattern}{Style.RESET_ALL}"
+                    )
+
+            self.malware_analysis["suspicious_patterns"] = suspicious_patterns
+
+        except Exception as e:
+            print(
+                f"  {Fore.YELLOW}⚠️ Não foi possível verificar padrões: {e}{Style.RESET_ALL}"
+            )
+
+    def _check_known_malicious_domains(self):
+        """Verificar se o domínio é similar a domínios maliciosos conhecidos"""
+        print(
+            f"{Fore.YELLOW}Verificando similaridade com domínios maliciosos...{Style.RESET_ALL}"
+        )
+
+        domain_parts = self.domain.split(".")
+        base_domain = domain_parts[0] if len(domain_parts) > 1 else self.domain
+
+        # Verificar similaridade com domínios maliciosos conhecidos
+        similar_domains = []
+        for malicious in MALWARE_INDICATORS["malicious_domains"]:
+            if (
+                self._calculate_domain_similarity(base_domain, malicious.split(".")[0])
+                > 0.7
+            ):
+                similar_domains.append(
+                    {
+                        "similar_to": malicious,
+                        "similarity": self._calculate_domain_similarity(
+                            base_domain, malicious.split(".")[0]
+                        ),
+                        "risk": "high",
+                    }
+                )
+                print(
+                    f"  {Fore.RED}🚨 Domínio similar a malicioso: {malicious}{Style.RESET_ALL}"
+                )
+
+        self.malware_analysis["similar_domains"] = similar_domains
+
+    def _check_malware_file_history(self):
+        """Verificar histórico de arquivos suspeitos"""
+        print(f"{Fore.YELLOW}Verificando histórico de arquivos...{Style.RESET_ALL}")
+
+        # Verificar arquivos de log e backup
+        suspicious_files = []
+        file_paths = [
+            "/error.log",
+            "/access.log",
+            "/debug.log",
+            "/backup.zip",
+            "/backup.sql",
+            "/backup.tar.gz",
+        ]
+
+        for file_path in file_paths:
+            try:
+                url = f"https://{self.domain}{file_path}"
+                response = self.session.head(url, timeout=5)
+
+                if response.status_code == 200:
+                    suspicious_files.append(
+                        {"file": file_path, "status": "accessible", "risk": "medium"}
+                    )
+                    print(
+                        f"  {Fore.YELLOW}⚠️ Arquivo suspeito acessível: {file_path}{Style.RESET_ALL}"
+                    )
+
+            except Exception:
+                continue
+
+        self.malware_analysis["suspicious_files"] = suspicious_files
+
+    def _calculate_domain_similarity(self, domain1, domain2):
+        """Calcular similaridade entre dois domínios usando algoritmo de Levenshtein"""
+        if len(domain1) < len(domain2):
+            domain1, domain2 = domain2, domain1
+
+        if len(domain2) == 0:
+            return 0.0
+
+        previous_row = list(range(len(domain2) + 1))
+        for i, c1 in enumerate(domain1):
+            current_row = [i + 1]
+            for j, c2 in enumerate(domain2):
+                insertions = previous_row[j + 1] + 1
+                deletions = current_row[j] + 1
+                substitutions = previous_row[j] + (c1 != c2)
+                current_row.append(min(insertions, deletions, substitutions))
+            previous_row = current_row
+
+        distance = previous_row[-1]
+        max_len = max(len(domain1), len(domain2))
+        return 1 - (distance / max_len)
+
+    def _display_malware_summary(self):
+        """Exibir resumo da análise de malware"""
+        print(f"\n{Fore.CYAN}📊 Resumo da Análise de Malware:{Style.RESET_ALL}")
+
+        total_indicators = (
+            len(self.malware_analysis.get("suspicious_urls", []))
+            + len(self.malware_analysis.get("suspicious_patterns", []))
+            + len(self.malware_analysis.get("similar_domains", []))
+            + len(self.malware_analysis.get("suspicious_files", []))
+        )
+
+        print(f"Total de indicadores suspeitos: {total_indicators}")
+
+        if total_indicators == 0:
+            print(
+                f"{Fore.GREEN}✅ Nenhum indicador de malware encontrado{Style.RESET_ALL}"
+            )
+        elif total_indicators <= 2:
+            print(
+                f"{Fore.YELLOW}⚠️ Alguns indicadores suspeitos encontrados{Style.RESET_ALL}"
+            )
+        else:
+            print(
+                f"{Fore.RED}🚨 Múltiplos indicadores de malware - alto risco{Style.RESET_ALL}"
+            )
+
+    def check_phishing_fraud(self):
+        """Verificação de phishing e fraudes"""
+        self.print_header("🎣 Verificação de Phishing e Fraudes")
+
+        try:
+            # Verificar indicadores de phishing
+            self._check_phishing_indicators()
+
+            # Verificar tentativas de spoofing
+            self._check_spoofing_attempts()
+
+            # Verificar URLs de phishing conhecidas
+            self._check_known_phishing_urls()
+
+            # Verificar padrões de fraude
+            self._check_fraud_patterns()
+
+            # Exibir resumo da verificação
+            self._display_phishing_summary()
+
+        except Exception as e:
+            print(f"{Fore.RED}Erro na verificação de phishing: {e}{Style.RESET_ALL}")
+            self.logger.error(f"Erro na verificação de phishing: {e}")
+
+    def _check_phishing_indicators(self):
+        """Verificar indicadores comuns de phishing"""
+        print(f"{Fore.YELLOW}Verificando indicadores de phishing...{Style.RESET_ALL}")
+
+        try:
+            response = self.session.get(f"https://{self.domain}", timeout=10)
+            content = response.text.lower()
+
+            phishing_indicators = []
+
+            # Verificar palavras-chave suspeitas
+            suspicious_keywords = [
+                "verify your account",
+                "account suspended",
+                "security alert",
+                "unusual activity",
+                "login attempt",
+                "password expired",
+                "update your information",
+                "confirm your identity",
+                "bank security",
+                "credit card verification",
+            ]
+
+            for keyword in suspicious_keywords:
+                if keyword in content:
+                    phishing_indicators.append(
+                        {
+                            "type": "suspicious_keyword",
+                            "keyword": keyword,
+                            "risk": "high",
+                        }
+                    )
+                    print(
+                        f"  {Fore.RED}🚨 Palavra-chave suspeita: {keyword}{Style.RESET_ALL}"
+                    )
+
+            # Verificar formulários de login
+            if "login" in content or "signin" in content:
+                if "password" in content and "username" in content:
+                    # Verificar se é um formulário de login legítimo
+                    if self._is_legitimate_login_form(content):
+                        print(
+                            f"  {Fore.GREEN}✅ Formulário de login parece legítimo{Style.RESET_ALL}"
+                        )
+                    else:
+                        phishing_indicators.append(
+                            {
+                                "type": "suspicious_login_form",
+                                "description": "Formulário de login suspeito",
+                                "risk": "high",
+                            }
+                        )
+                        print(
+                            f"  {Fore.RED}🚨 Formulário de login suspeito detectado{Style.RESET_ALL}"
+                        )
+
+            self.phishing_indicators["keywords"] = phishing_indicators
+
+        except Exception as e:
+            print(
+                f"  {Fore.YELLOW}⚠️ Não foi possível verificar indicadores: {e}{Style.RESET_ALL}"
+            )
+
+    def _check_spoofing_attempts(self):
+        """Verificar tentativas de spoofing"""
+        print(f"{Fore.YELLOW}Verificando tentativas de spoofing...{Style.RESET_ALL}")
+
+        spoofing_indicators = []
+
+        # Verificar se o domínio tenta se passar por um serviço conhecido
+        known_services = [
+            "google",
+            "facebook",
+            "amazon",
+            "microsoft",
+            "apple",
+            "paypal",
+            "ebay",
+            "netflix",
+            "spotify",
+            "twitter",
+        ]
+
+        domain_lower = self.domain.lower()
+        for service in known_services:
+            if service in domain_lower and service not in self.domain:
+                # Verificar se é uma tentativa de typosquatting
+                if self._is_typosquatting(self.domain, service):
+                    spoofing_indicators.append(
+                        {
+                            "type": "typosquatting",
+                            "target_service": service,
+                            "risk": "high",
+                        }
+                    )
+                    print(
+                        f"  {Fore.RED}🚨 Possível typosquatting de {service}{Style.RESET_ALL}"
+                    )
+
+        # Verificar caracteres confusos (homoglyphs)
+        if self._has_confusing_characters(self.domain):
+            spoofing_indicators.append(
+                {
+                    "type": "confusing_characters",
+                    "description": "Domínio usa caracteres confusos",
+                    "risk": "medium",
+                }
+            )
+            print(f"  {Fore.YELLOW}⚠️ Domínio usa caracteres confusos{Style.RESET_ALL}")
+
+        self.phishing_indicators["spoofing"] = spoofing_indicators
+
+    def _check_known_phishing_urls(self):
+        """Verificar URLs de phishing conhecidas"""
+        print(
+            f"{Fore.YELLOW}Verificando URLs de phishing conhecidas...{Style.RESET_ALL}"
+        )
+
+        try:
+            # Verificar no PhishTank (API pública)
+            phishtank_url = f"https://checkurl.phishtank.com/checkurl/"
+            data = {"url": f"https://{self.domain}"}
+
+            response = self.session.post(phishtank_url, data=data, timeout=10)
+
+            if "phish" in response.text.lower():
+                self.phishing_indicators["phishtank"] = {
+                    "status": "phishing",
+                    "source": "PhishTank",
+                    "risk": "high",
+                }
+                print(
+                    f"  {Fore.RED}🚨 Domínio reportado como phishing no PhishTank{Style.RESET_ALL}"
+                )
+            else:
+                self.phishing_indicators["phishtank"] = {
+                    "status": "clean",
+                    "source": "PhishTank",
+                }
+                print(
+                    f"  {Fore.GREEN}✅ Domínio não encontrado no PhishTank{Style.RESET_ALL}"
+                )
+
+        except Exception as e:
+            print(
+                f"  {Fore.YELLOW}⚠️ Não foi possível verificar no PhishTank: {e}{Style.RESET_ALL}"
+            )
+
+    def _check_fraud_patterns(self):
+        """Verificar padrões de fraude"""
+        print(f"{Fore.YELLOW}Verificando padrões de fraude...{Style.RESET_ALL}")
+
+        fraud_indicators = []
+
+        try:
+            response = self.session.get(f"https://{self.domain}", timeout=10)
+            content = response.text.lower()
+
+            # Verificar padrões de fraude financeira
+            fraud_patterns = [
+                "you have won",
+                "claim your prize",
+                "free money",
+                "investment opportunity",
+                "get rich quick",
+                "lottery winner",
+                "inheritance",
+                "unclaimed funds",
+                "tax refund",
+            ]
+
+            for pattern in fraud_patterns:
+                if pattern in content:
+                    fraud_indicators.append(
+                        {"type": "fraud_pattern", "pattern": pattern, "risk": "high"}
+                    )
+                    print(
+                        f"  {Fore.RED}🚨 Padrão de fraude detectado: {pattern}{Style.RESET_ALL}"
+                    )
+
+            self.phishing_indicators["fraud_patterns"] = fraud_indicators
+
+        except Exception as e:
+            print(
+                f"  {Fore.YELLOW}⚠️ Não foi possível verificar padrões de fraude: {e}{Style.RESET_ALL}"
+            )
+
+    def _is_legitimate_login_form(self, content):
+        """Verificar se um formulário de login é legítimo"""
+        # Verificar se tem campos de segurança
+        security_indicators = [
+            "csrf",
+            "token",
+            "nonce",
+            "captcha",
+            "recaptcha",
+            "two-factor",
+            "2fa",
+            "mfa",
+            "otp",
+        ]
+
+        return any(indicator in content for indicator in security_indicators)
+
+    def _is_typosquatting(self, domain, service):
+        """Verificar se um domínio é typosquatting de um serviço"""
+        # Implementar lógica de detecção de typosquatting
+        # Por simplicidade, vamos usar uma verificação básica
+        return len(domain) <= len(service) + 3 and service in domain
+
+    def _has_confusing_characters(self, domain):
+        """Verificar se um domínio usa caracteres confusos"""
+        confusing_chars = {
+            "0": "o",
+            "1": "l",
+            "3": "e",
+            "5": "s",
+            "6": "g",
+            "8": "b",
+            "9": "g",
+            "l": "1",
+            "o": "0",
+            "e": "3",
+        }
+
+        for char in domain:
+            if char in confusing_chars:
+                return True
+        return False
+
+    def _display_phishing_summary(self):
+        """Exibir resumo da verificação de phishing"""
+        print(f"\n{Fore.CYAN}📊 Resumo da Verificação de Phishing:{Style.RESET_ALL}")
+
+        total_indicators = (
+            len(self.phishing_indicators.get("keywords", []))
+            + len(self.phishing_indicators.get("spoofing", []))
+            + len(self.phishing_indicators.get("fraud_patterns", []))
+        )
+
+        phishtank_status = self.phishing_indicators.get("phishtank", {}).get(
+            "status", "unknown"
+        )
+
+        print(f"Total de indicadores de phishing: {total_indicators}")
+        print(f"Status no PhishTank: {phishtank_status}")
+
+        if total_indicators == 0 and phishtank_status != "phishing":
+            print(
+                f"{Fore.GREEN}✅ Nenhum indicador de phishing detectado{Style.RESET_ALL}"
+            )
+        elif total_indicators <= 2:
+            print(
+                f"{Fore.YELLOW}⚠️ Alguns indicadores de phishing detectados{Style.RESET_ALL}"
+            )
+        else:
+            print(
+                f"{Fore.RED}🚨 Múltiplos indicadores de phishing - alto risco{Style.RESET_ALL}"
+            )
+
+    def calculate_reputation_score(self):
+        """Score de reputação baseado em múltiplas fontes"""
+        self.print_header("📊 Score de Reputação")
+
+        try:
+            # Inicializar score
+            base_score = 100
+            deductions = 0
+            reputation_details = {}
+
+            print(f"{Fore.YELLOW}Calculando score de reputação...{Style.RESET_ALL}")
+
+            # 1. Verificar blacklists
+            blacklist_score = self._calculate_blacklist_score()
+            reputation_details["blacklists"] = blacklist_score
+
+            # 2. Verificar análise de malware
+            malware_score = self._calculate_malware_score()
+            reputation_details["malware"] = malware_score
+
+            # 3. Verificar phishing
+            phishing_score = self._calculate_phishing_score()
+            reputation_details["phishing"] = phishing_score
+
+            # 4. Verificar APIs de reputação externas
+            external_reputation = self._check_external_reputation()
+            reputation_details["external"] = external_reputation
+
+            # 5. Verificar idade do domínio
+            domain_age_score = self._calculate_domain_age_score()
+            reputation_details["domain_age"] = domain_age_score
+
+            # 6. Verificar configurações de segurança
+            security_score = self._calculate_security_score()
+            reputation_details["security"] = security_score
+
+            # Calcular score final
+            final_score = self._calculate_final_score(reputation_details)
+
+            # Armazenar resultados
+            self.reputation_score = final_score
+            self.reputation_details = reputation_details
+
+            # Exibir score final
+            self._display_reputation_score(final_score, reputation_details)
+
+        except Exception as e:
+            print(
+                f"{Fore.RED}Erro no cálculo do score de reputação: {e}{Style.RESET_ALL}"
+            )
+            self.logger.error(f"Erro no cálculo do score de reputação: {e}")
+
+    def _calculate_blacklist_score(self):
+        """Calcular score baseado nas blacklists"""
+        if not hasattr(self, "blacklist_results") or not self.blacklist_results:
+            return {"score": 0, "deduction": 0, "details": "Não verificado"}
+
+        blacklisted_count = self.blacklist_results.get("blacklisted_count", 0)
+        total_blacklists = self.blacklist_results.get("total_blacklists", 0)
+
+        if total_blacklists == 0:
+            return {
+                "score": 0,
+                "deduction": 0,
+                "details": "Nenhuma blacklist verificada",
+            }
+
+        # Penalizar por cada blacklist
+        deduction_per_blacklist = 20
+        total_deduction = blacklisted_count * deduction_per_blacklist
+
+        score = max(0, 100 - total_deduction)
+
+        return {
+            "score": score,
+            "deduction": total_deduction,
+            "details": f"Em {blacklisted_count}/{total_blacklists} blacklists",
+        }
+
+    def _calculate_malware_score(self):
+        """Calcular score baseado na análise de malware"""
+        if not hasattr(self, "malware_analysis") or not self.malware_analysis:
+            return {"score": 0, "deduction": 0, "details": "Não verificado"}
+
+        total_indicators = (
+            len(self.malware_analysis.get("suspicious_urls", []))
+            + len(self.malware_analysis.get("suspicious_patterns", []))
+            + len(self.malware_analysis.get("similar_domains", []))
+            + len(self.malware_analysis.get("suspicious_files", []))
+        )
+
+        # Penalizar por cada indicador
+        deduction_per_indicator = 15
+        total_deduction = total_indicators * deduction_per_indicator
+
+        score = max(0, 100 - total_deduction)
+
+        return {
+            "score": score,
+            "deduction": total_deduction,
+            "details": f"{total_indicators} indicadores suspeitos",
+        }
+
+    def _calculate_phishing_score(self):
+        """Calcular score baseado na verificação de phishing"""
+        if not hasattr(self, "phishing_indicators") or not self.phishing_indicators:
+            return {"score": 0, "deduction": 0, "details": "Não verificado"}
+
+        total_indicators = (
+            len(self.phishing_indicators.get("keywords", []))
+            + len(self.phishing_indicators.get("spoofing", []))
+            + len(self.phishing_indicators.get("fraud_patterns", []))
+        )
+
+        # Penalizar por cada indicador
+        deduction_per_indicator = 20
+        total_deduction = total_indicators * deduction_per_indicator
+
+        # Penalizar adicionalmente se estiver no PhishTank
+        phishtank_status = self.phishing_indicators.get("phishtank", {}).get(
+            "status", "unknown"
+        )
+        if phishtank_status == "phishing":
+            total_deduction += 50
+
+        score = max(0, 100 - total_deduction)
+
+        return {
+            "score": score,
+            "deduction": total_deduction,
+            "details": f"{total_indicators} indicadores de phishing",
+        }
+
+    def _check_external_reputation(self):
+        """Verificar reputação em APIs externas"""
+        print(f"  {Fore.YELLOW}Verificando reputação externa...{Style.RESET_ALL}")
+
+        external_scores = {}
+
+        # Verificar URLhaus (sem API key)
+        try:
+            urlhaus_url = f"https://urlhaus-api.abuse.ch/v1/host/"
+            data = {"host": self.domain}
+
+            response = self.session.post(urlhaus_url, data=data, timeout=10)
+            result = response.json()
+
+            if result.get("query_status") == "ok":
+                if result.get("url_count", 0) > 0:
+                    external_scores["urlhaus"] = {
+                        "score": 0,
+                        "deduction": 100,
+                        "details": "Domínio reportado como malicioso",
+                    }
+                    print(f"    {Fore.RED}🚨 URLhaus: MALICIOSO{Style.RESET_ALL}")
+                else:
+                    external_scores["urlhaus"] = {
+                        "score": 100,
+                        "deduction": 0,
+                        "details": "Domínio limpo",
+                    }
+                    print(f"    {Fore.GREEN}✅ URLhaus: LIMPO{Style.RESET_ALL}")
+            else:
+                external_scores["urlhaus"] = {
+                    "score": 50,
+                    "deduction": 50,
+                    "details": "Erro na verificação",
+                }
+                print(f"    {Fore.YELLOW}⚠️ URLhaus: ERRO{Style.RESET_ALL}")
+
+        except Exception as e:
+            external_scores["urlhaus"] = {
+                "score": 50,
+                "deduction": 50,
+                "details": f"Erro: {e}",
+            }
+            print(f"    {Fore.YELLOW}⚠️ URLhaus: ERRO{Style.RESET_ALL}")
+
+        # Calcular score médio das APIs externas
+        if external_scores:
+            total_score = sum(score["score"] for score in external_scores.values())
+            avg_score = total_score / len(external_scores)
+            total_deduction = 100 - avg_score
+
+            return {
+                "score": avg_score,
+                "deduction": total_deduction,
+                "details": f"Média de {len(external_scores)} APIs externas",
+                "apis": external_scores,
+            }
+        else:
+            return {
+                "score": 50,
+                "deduction": 50,
+                "details": "Nenhuma API externa verificada",
+            }
+
+    def _calculate_domain_age_score(self):
+        """Calcular score baseado na idade do domínio"""
+        try:
+            domain_info = whois.whois(self.domain)
+            creation_date = domain_info.creation_date
+
+            if creation_date:
+                if isinstance(creation_date, list):
+                    creation_date = creation_date[0]
+
+                age_days = (datetime.now() - creation_date).days
+
+                if age_days > 365 * 2:  # Mais de 2 anos
+                    return {
+                        "score": 100,
+                        "deduction": 0,
+                        "details": f"Domínio antigo ({age_days} dias)",
+                    }
+                elif age_days > 365:  # Mais de 1 ano
+                    return {
+                        "score": 80,
+                        "deduction": 20,
+                        "details": f"Domínio maduro ({age_days} dias)",
+                    }
+                elif age_days > 30:  # Mais de 1 mês
+                    return {
+                        "score": 60,
+                        "deduction": 40,
+                        "details": f"Domínio recente ({age_days} dias)",
+                    }
+                else:  # Menos de 1 mês
+                    return {
+                        "score": 30,
+                        "deduction": 70,
+                        "details": f"Domínio muito recente ({age_days} dias)",
+                    }
+            else:
+                return {
+                    "score": 50,
+                    "deduction": 50,
+                    "details": "Data de criação desconhecida",
+                }
+
+        except Exception as e:
+            return {
+                "score": 50,
+                "deduction": 50,
+                "details": f"Erro na verificação: {e}",
+            }
+
+    def _calculate_security_score(self):
+        """Calcular score baseado nas configurações de segurança"""
+        # Este método seria implementado baseado nas verificações de segurança existentes
+        # Por simplicidade, vamos retornar um score base
+        return {
+            "score": 75,
+            "deduction": 25,
+            "details": "Configurações de segurança básicas",
+        }
+
+    def _calculate_final_score(self, reputation_details):
+        """Calcular score final baseado em todos os fatores"""
+        if not reputation_details:
+            return 0
+
+        # Pesos para cada categoria
+        weights = {
+            "blacklists": 0.25,
+            "malware": 0.25,
+            "phishing": 0.20,
+            "external": 0.20,
+            "domain_age": 0.05,
+            "security": 0.05,
+        }
+
+        total_score = 0
+        total_weight = 0
+
+        for category, weight in weights.items():
+            if category in reputation_details:
+                category_score = reputation_details[category].get("score", 0)
+                total_score += category_score * weight
+                total_weight += weight
+
+        if total_weight > 0:
+            final_score = total_score / total_weight
+        else:
+            final_score = 0
+
+        return round(final_score, 1)
+
+    def _display_reputation_score(self, final_score, reputation_details):
+        """Exibir o score de reputação final"""
+        print(f"\n{Fore.CYAN}📊 Score de Reputação Final:{Style.RESET_ALL}")
+
+        # Determinar categoria do score
+        if final_score >= 80:
+            category = f"{Fore.GREEN}EXCELENTE{Style.RESET_ALL}"
+            risk_level = f"{Fore.GREEN}BAIXO RISCO{Style.RESET_ALL}"
+        elif final_score >= 60:
+            category = f"{Fore.YELLOW}BOM{Style.RESET_ALL}"
+            risk_level = f"{Fore.YELLOW}RISCO MODERADO{Style.RESET_ALL}"
+        elif final_score >= 40:
+            category = f"{Fore.YELLOW}REGULAR{Style.RESET_ALL}"
+            risk_level = f"{Fore.YELLOW}RISCO ALTO{Style.RESET_ALL}"
+        else:
+            category = f"{Fore.RED}RUIM{Style.RESET_ALL}"
+            risk_level = f"{Fore.RED}ALTÍSSIMO RISCO{Style.RESET_ALL}"
+
+        print(f"Score Final: {Fore.CYAN}{final_score}/100{Style.RESET_ALL}")
+        print(f"Categoria: {category}")
+        print(f"Nível de Risco: {risk_level}")
+
+        print(f"\n{Fore.CYAN}Detalhes por Categoria:{Style.RESET_ALL}")
+        for category_name, details in reputation_details.items():
+            if isinstance(details, dict) and "score" in details:
+                score = details["score"]
+                deduction = details["deduction"]
+                description = details["details"]
+
+                if score >= 80:
+                    color = Fore.GREEN
+                elif score >= 60:
+                    color = Fore.YELLOW
+                else:
+                    color = Fore.RED
+
+                print(
+                    f"  {category_name.title()}: {color}{score}/100{Style.RESET_ALL} ({description})"
+                )
 
 
 def main():
